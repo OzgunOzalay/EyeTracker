@@ -4,6 +4,9 @@ camera:
   width: 1920
   height: 1080
   fps: 60
+  brightness: 150          # 0–255; raise if image is dark (camera default ≈128)
+  # auto_exposure: 3       # 1=manual, 3=aperture-priority auto (V4L2 value)
+  # exposure: -6           # V4L2 log-scale; only active when auto_exposure: 1
 
 # ─── Servo ────────────────────────────────────────────────────────────────────
 servo:
@@ -52,7 +55,9 @@ tracking:
                            # prevents micro-jitter when face is centered
   no_face_timeout: 1.5     # seconds – after this long with no face detected,
                            # reset PID integrators (servos hold last position)
-  landmark_index: 4        # FaceMesh nose tip landmark index
+  detection_scale: 0.25    # downsample factor for Haar face detection
+                           # 0.25 → runs detector on 480×270 instead of 1920×1080
+                           # increase toward 0.5 if distant faces are missed
 
 # ─── Display (local OpenCV window) ────────────────────────────────────────────
 display:

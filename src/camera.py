@@ -124,6 +124,23 @@ class CameraCapture:
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
         self._cap.set(cv2.CAP_PROP_FPS,          self._fps)
 
+        # Optional brightness / exposure overrides from config.
+        # All three are no-ops when absent — camera keeps its own defaults.
+        # V4L2 auto_exposure: 1 = manual, 3 = aperture-priority auto.
+        brightness    = self._cfg.get("brightness")
+        auto_exposure = self._cfg.get("auto_exposure")
+        exposure      = self._cfg.get("exposure")
+
+        if auto_exposure is not None:
+            self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, int(auto_exposure))
+        if exposure is not None:
+            self._cap.set(cv2.CAP_PROP_EXPOSURE, int(exposure))
+        if brightness is not None:
+            self._cap.set(cv2.CAP_PROP_BRIGHTNESS, int(brightness))
+            actual_brightness = self._cap.get(cv2.CAP_PROP_BRIGHTNESS)
+            logger.info("Brightness set to %d (driver reports %.0f)",
+                        int(brightness), actual_brightness)
+
         actual_w   = self.width
         actual_h   = self.height
         actual_fps = self.actual_fps

@@ -56,6 +56,9 @@ class HeadTracker:
 
         self._deadband        = float(self._tracking_cfg.get("deadband", 0.03))
         self._no_face_timeout = float(self._tracking_cfg.get("no_face_timeout", 1.5))
+        # Scale factor for the detection image: 0.25 → 480×270 at 1080p, ~16× fewer
+        # pixels for detectMultiScale, keeping FPS high without hurting accuracy.
+        self._detection_scale = float(self._tracking_cfg.get("detection_scale", 0.25))
 
         self._last_face_time: float = time.monotonic()
         self._face_absent_logged: bool = False
@@ -71,8 +74,11 @@ class HeadTracker:
 
         logger.info(
             "HeadTracker ready (OpenCV Haar cascade). "
-            "deadband=%.3f, frame=%dx%d",
-            self._deadband, frame_width, frame_height,
+            "deadband=%.3f, detection_scale=%.2f (%dx%d detect), frame=%dx%d",
+            self._deadband, self._detection_scale,
+            int(frame_width * self._detection_scale),
+            int(frame_height * self._detection_scale),
+            frame_width, frame_height,
         )
 
     # ------------------------------------------------------------------
@@ -108,20 +114,36 @@ class HeadTracker:
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Detect faces — minSize scaled to ~4 % of frame height for robustness
-        # at 1920×1080 this is roughly 43 px; keeps out tiny false positives.
-        min_dim = max(40, int(frame_h * 0.04))
-        faces = self._detector.detectMultiScale(
-            gray,
+        # Downsample for detection — Haar cascade is O(pixels), so 0.25× scale
+        # reduces the detection image from ~2 MP to ~130 K pixels (~16× faster).
+        # Bounding boxes are scaled back to full resolution after detection.
+        scale  = self._detection_scale
+        det_w  = max(1, int(frame_w * scale))
+        det_h  = max(1, int(frame_h * scale))
+        small  = cv2.resize(gray, (det_w, det_h), interpolation=cv2.INTER_LINEAR)
+
+        # minSize in the *downscaled* image — keep ~4 % of scaled height so
+        # the same real-world minimum face size is enforced regardless of scale.
+        min_dim_small = max(8, int(det_h * 0.04))
+        raw_faces = self._detector.detectMultiScale(
+            small,
             scaleFactor=1.1,
             minNeighbors=5,
-            minSize=(min_dim, min_dim),
+            minSize=(min_dim_small, min_dim_small),
             flags=cv2.CASCADE_SCALE_IMAGE,
         )
 
+        # Scale bounding boxes back to full-resolution coordinates
+        if len(raw_faces) > 0:
+            inv = 1.0 / scale
+            faces = [(int(x * inv), int(y * inv), int(w * inv), int(h * inv))
+                     for x, y, w, h in raw_faces]
+        else:
+            faces = []
+
         result = TrackingResult(face_detected=False)
 
-        if len(faces) > 0:
+        if faces:
             # Pick the largest detected face by area
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
             face_cx = x + w // 2
