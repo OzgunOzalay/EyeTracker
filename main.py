@@ -53,7 +53,7 @@ def load_config(path: str = "config.yaml") -> dict:
             f"Config file not found: {config_path.resolve()}\n"
             "Ensure config.yaml is in the project root directory."
         )
-    with open(config_path) as fh:
+    with open(config_path, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
