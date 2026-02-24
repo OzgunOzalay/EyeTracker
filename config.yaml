@@ -1,0 +1,75 @@
+# ─── Camera ───────────────────────────────────────────────────────────────────
+camera:
+  device_index: 0          # /dev/video0
+  width: 1920
+  height: 1080
+  fps: 60
+
+# ─── Servo ────────────────────────────────────────────────────────────────────
+servo:
+  i2c_address: 0x40        # PCA9685 default I2C address
+  frequency: 50            # Hz – standard PWM frequency for MG996R
+
+  pan:
+    channel: 0             # PCA9685 output channel for pan servo
+    min_angle: 30          # degrees – hard mechanical safety limit
+    max_angle: 150         # degrees – hard mechanical safety limit
+    center_angle: 90       # starting / home position
+
+  tilt:
+    channel: 1             # PCA9685 output channel for tilt servo
+    min_angle: 45          # degrees
+    max_angle: 135         # degrees
+    center_angle: 90       # starting / home position
+
+# ─── PID controllers ──────────────────────────────────────────────────────────
+# Error signal is normalized: -1.0 (full left/up) to +1.0 (full right/down)
+# Output is a delta in degrees applied each control loop iteration.
+#
+# Tuning guide:
+#   1. Start with ki=0, kd=0. Increase kp until servo oscillates, then back off 20%.
+#   2. Add kd (~10-15% of kp) to damp oscillation.
+#   3. Add ki slowly (1% of kp) to remove steady-state offset.
+#   4. Adjust max_output and deadband to taste.
+pid:
+  pan:
+    kp: 25.0               # degrees per unit of normalized error
+    ki: 0.4                # integrator gain – low to avoid wind-up
+    kd: 3.5                # derivative – damps fast head turns
+    max_output: 8.0        # max degrees to move per control frame
+    integral_limit: 15.0   # anti-windup clamp on integrator accumulator
+
+  tilt:
+    kp: 20.0               # slightly softer than pan
+    ki: 0.3
+    kd: 3.0
+    max_output: 6.0
+    integral_limit: 12.0
+
+# ─── Tracking behaviour ───────────────────────────────────────────────────────
+tracking:
+  deadband: 0.03           # normalized units – ignore error smaller than this
+                           # prevents micro-jitter when face is centered
+  no_face_timeout: 1.5     # seconds – after this long with no face detected,
+                           # reset PID integrators (servos hold last position)
+  landmark_index: 4        # FaceMesh nose tip landmark index
+
+# ─── Display (local OpenCV window) ────────────────────────────────────────────
+display:
+  show_window: true        # set false for headless / SSH operation
+  window_title: "EyeTracker Phase 1"
+  crosshair_color: [0, 255, 0]      # BGR
+  landmark_color: [0, 200, 255]     # BGR – nose-tip dot
+  text_color: [255, 255, 255]       # BGR – HUD text
+  font_scale: 0.55
+  line_thickness: 1
+
+# ─── Web UI ───────────────────────────────────────────────────────────────────
+web:
+  enabled: true
+  host: "0.0.0.0"          # listen on all interfaces (access from any device on LAN)
+  port: 5000
+  stream_width: 960        # MJPEG stream width (downscaled from 1920 for bandwidth)
+  stream_height: 540       # MJPEG stream height
+  stream_quality: 80       # JPEG quality 1-100
+  status_update_ms: 200    # how often the web page polls /status (milliseconds)

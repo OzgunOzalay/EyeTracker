@@ -1,0 +1,19 @@
+# Computer vision and face detection
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# Servo hardware (PCA9685 via I2C)
+adafruit-circuitpython-servokit>=1.3.11
+adafruit-circuitpython-motor>=3.4.13
+adafruit-circuitpython-pca9685>=3.4.13
+adafruit-circuitpython-busdevice>=5.2.9
+adafruit-blinka>=8.0.0
+
+# Web UI
+flask>=3.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# Numerical (pin below 2.0 — NumPy 2.x breaks MediaPipe binary ABI)
+numpy>=1.24.0,<2.0.0

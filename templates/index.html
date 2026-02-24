@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EyeTracker — Live Dashboard</title>
+  <style>
+    /* ── Reset & base ──────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e8e8e8;
+      font-family: 'Courier New', Courier, monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      letter-spacing: 0.15em;
+      color: #4caf50;
+      text-transform: uppercase;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────────────── */
+    .layout {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      width: 100%;
+      max-width: 1200px;
+      justify-content: center;
+    }
+
+    /* ── Video stream ──────────────────────────────────────────────────── */
+    .stream-card {
+      flex: 1 1 640px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .stream-card img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .stream-label {
+      padding: 6px 10px;
+      font-size: 0.7rem;
+      color: #666;
+      border-top: 1px solid #2a2a2a;
+    }
+
+    /* ── Status panel ──────────────────────────────────────────────────── */
+    .status-panel {
+      flex: 0 1 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* ── Cards ─────────────────────────────────────────────────────────── */
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 14px;
+    }
+
+    .card-title {
+      font-size: 0.65rem;
+      letter-spacing: 0.12em;
+      color: #888;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    /* ── Status indicator ──────────────────────────────────────────────── */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      font-weight: bold;
+      letter-spacing: 0.1em;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    .status-badge.tracking  { background: #1b3a1b; color: #4caf50; border: 1px solid #4caf50; }
+    .status-badge.searching { background: #3a1b00; color: #ff6d00; border: 1px solid #ff6d00; }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      animation: pulse 1.2s infinite;
+    }
+
+    .status-badge.tracking  .dot { background: #4caf50; }
+    .status-badge.searching .dot { background: #ff6d00; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    /* ── Angle gauges ──────────────────────────────────────────────────── */
+    .gauge-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .gauge-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      margin-bottom: 4px;
+    }
+
+    .gauge-label span:last-child {
+      color: #4caf50;
+      font-size: 0.9rem;
+    }
+
+    .gauge-track {
+      height: 8px;
+      background: #2a2a2a;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .gauge-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #1565c0, #4caf50);
+      border-radius: 4px;
+      transition: width 0.15s ease-out;
+    }
+
+    /* ── Error bars ────────────────────────────────────────────────────── */
+    .error-bar-container {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .error-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+    }
+
+    .error-axis {
+      width: 18px;
+      text-align: center;
+      color: #888;
+    }
+
+    .error-track {
+      flex: 1;
+      height: 10px;
+      background: #2a2a2a;
+      border-radius: 5px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* center tick */
+    .error-track::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 0; bottom: 0;
+      width: 1px;
+      background: #444;
+    }
+
+    .error-fill {
+      position: absolute;
+      top: 0; bottom: 0;
+      border-radius: 5px;
+      transition: left 0.15s ease-out, width 0.15s ease-out;
+      background: #ff5722;
+    }
+
+    .error-val {
+      width: 54px;
+      text-align: right;
+      color: #aaa;
+      font-size: 0.72rem;
+    }
+
+    /* ── FPS ────────────────────────────────────────────────────────────── */
+    .fps-value {
+      font-size: 2rem;
+      color: #4caf50;
+      text-align: center;
+      line-height: 1;
+    }
+
+    .fps-unit {
+      font-size: 0.65rem;
+      color: #666;
+      text-align: center;
+      margin-top: 2px;
+    }
+
+    /* ── Connection status ─────────────────────────────────────────────── */
+    #conn-status {
+      font-size: 0.65rem;
+      color: #555;
+      text-align: center;
+    }
+
+    #conn-status.ok  { color: #4caf50; }
+    #conn-status.err { color: #f44336; }
+  </style>
+</head>
+<body>
+
+  <h1>EyeTracker — Phase 1</h1>
+
+  <div class="layout">
+
+    <!-- Live stream -->
+    <div class="stream-card">
+      <img id="stream" src="/stream" alt="Live camera feed">
+      <div class="stream-label">Arducam B0498 · 1920×1080 · downscaled 960×540</div>
+    </div>
+
+    <!-- Status panel -->
+    <div class="status-panel">
+
+      <!-- Tracking status -->
+      <div class="card">
+        <div class="card-title">Tracking Status</div>
+        <div id="status-badge" class="status-badge searching">
+          <span class="dot"></span>
+          <span id="status-text">SEARCHING</span>
+        </div>
+      </div>
+
+      <!-- Servo angles -->
+      <div class="card">
+        <div class="card-title">Servo Angles</div>
+        <div class="gauge-row">
+          <div>
+            <div class="gauge-label">
+              <span>PAN</span>
+              <span id="pan-val">90.0°</span>
+            </div>
+            <div class="gauge-track">
+              <div class="gauge-fill" id="pan-fill" style="width: 50%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="gauge-label">
+              <span>TILT</span>
+              <span id="tilt-val">90.0°</span>
+            </div>
+            <div class="gauge-track">
+              <div class="gauge-fill" id="tilt-fill" style="width: 50%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error signal -->
+      <div class="card">
+        <div class="card-title">Tracking Error (normalized)</div>
+        <div class="error-bar-container">
+          <div class="error-row">
+            <span class="error-axis">X</span>
+            <div class="error-track">
+              <div class="error-fill" id="err-x-fill"></div>
+            </div>
+            <span class="error-val" id="err-x-val">0.000</span>
+          </div>
+          <div class="error-row">
+            <span class="error-axis">Y</span>
+            <div class="error-track">
+              <div class="error-fill" id="err-y-fill"></div>
+            </div>
+            <span class="error-val" id="err-y-val">0.000</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- FPS -->
+      <div class="card">
+        <div class="card-title">Frame Rate</div>
+        <div class="fps-value" id="fps-val">—</div>
+        <div class="fps-unit">FPS (control loop)</div>
+      </div>
+
+      <!-- Connection -->
+      <div id="conn-status">Connecting…</div>
+
+    </div><!-- /.status-panel -->
+  </div><!-- /.layout -->
+
+  <script>
+    // ── Constants ──────────────────────────────────────────────────────────
+    const PAN_MIN  = 30,  PAN_MAX  = 150;   // must match config.yaml
+    const TILT_MIN = 45,  TILT_MAX = 135;
+
+    // ── DOM refs ───────────────────────────────────────────────────────────
+    const statusBadge  = document.getElementById('status-badge');
+    const statusText   = document.getElementById('status-text');
+    const panVal       = document.getElementById('pan-val');
+    const panFill      = document.getElementById('pan-fill');
+    const tiltVal      = document.getElementById('tilt-val');
+    const tiltFill     = document.getElementById('tilt-fill');
+    const errXFill     = document.getElementById('err-x-fill');
+    const errYFill     = document.getElementById('err-y-fill');
+    const errXVal      = document.getElementById('err-x-val');
+    const errYVal      = document.getElementById('err-y-val');
+    const fpsVal       = document.getElementById('fps-val');
+    const connStatus   = document.getElementById('conn-status');
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    // Map an angle in [min, max] to a percentage [0, 100]
+    function angleToPercent(angle, min, max) {
+      return clamp((angle - min) / (max - min) * 100, 0, 100);
+    }
+
+    // Map a normalized error [-1, 1] to left/width for the error fill bar.
+    // Center = 50%. Negative errors extend left; positive extend right.
+    function errorToStyle(err) {
+      const clamped = clamp(err, -1, 1);
+      if (clamped >= 0) {
+        return { left: '50%', width: (clamped * 50) + '%' };
+      } else {
+        const w = (-clamped) * 50;
+        return { left: (50 - w) + '%', width: w + '%' };
+      }
+    }
+
+    // ── Update UI from status JSON ─────────────────────────────────────────
+    function applyStatus(data) {
+      // Tracking status badge
+      if (data.face_detected) {
+        statusBadge.className = 'status-badge tracking';
+        statusText.textContent = 'TRACKING';
+      } else {
+        statusBadge.className = 'status-badge searching';
+        statusText.textContent = 'SEARCHING';
+      }
+
+      // Pan gauge
+      panVal.textContent  = data.pan.toFixed(1) + '°';
+      panFill.style.width = angleToPercent(data.pan, PAN_MIN, PAN_MAX) + '%';
+
+      // Tilt gauge
+      tiltVal.textContent  = data.tilt.toFixed(1) + '°';
+      tiltFill.style.width = angleToPercent(data.tilt, TILT_MIN, TILT_MAX) + '%';
+
+      // Error bars
+      const sx = errorToStyle(data.error_x);
+      errXFill.style.left  = sx.left;
+      errXFill.style.width = sx.width;
+      errXVal.textContent  = (data.error_x >= 0 ? '+' : '') + data.error_x.toFixed(3);
+
+      const sy = errorToStyle(data.error_y);
+      errYFill.style.left  = sy.left;
+      errYFill.style.width = sy.width;
+      errYVal.textContent  = (data.error_y >= 0 ? '+' : '') + data.error_y.toFixed(3);
+
+      // FPS
+      fpsVal.textContent = data.fps.toFixed(1);
+    }
+
+    // ── Polling loop ───────────────────────────────────────────────────────
+    let pollInterval = null;
+    let failCount = 0;
+
+    async function poll() {
+      try {
+        const resp = await fetch('/status');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        applyStatus(data);
+        connStatus.textContent = 'Connected';
+        connStatus.className   = 'ok';
+        failCount = 0;
+      } catch (e) {
+        failCount++;
+        connStatus.textContent = `Connection error (${failCount})`;
+        connStatus.className   = 'err';
+      }
+    }
+
+    // Start polling — interval matches config.yaml web.status_update_ms
+    poll();
+    pollInterval = setInterval(poll, 200);
+
+    // ── Stream error fallback ──────────────────────────────────────────────
+    const streamImg = document.getElementById('stream');
+    streamImg.addEventListener('error', () => {
+      // Retry stream after 2 s on failure (e.g. server restart)
+      setTimeout(() => { streamImg.src = '/stream?' + Date.now(); }, 2000);
+    });
+  </script>
+</body>
+</html>
