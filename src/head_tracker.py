@@ -1,27 +1,30 @@
 """
-Head tracker using MediaPipe FaceMesh.
+Head tracker using OpenCV Haar cascade face detection.
+
+Replaces the MediaPipe FaceMesh backend which fails on Raspberry Pi 5 due
+to a known UnicodeDecodeError inside MediaPipe's binary graph loader
+(solution_base.py) on ARM64 / Python 3.11.
 
 Responsibilities:
-  - Initialize the FaceMesh detector (max 1 face, refine_landmarks=True)
-  - Process BGR frames: convert to RGB, run inference, extract nose tip landmark
-  - Compute normalized (error_x, error_y) in [-1.0, 1.0] from frame center
-  - Apply a deadband to suppress micro-jitter when face is centered
-  - Draw face mesh tessellation, contours, nose-tip dot, crosshair, and HUD overlay
+  - Initialize the frontal-face Haar cascade (bundled with OpenCV — no download)
+  - Process BGR frames: detect largest face, extract bounding-box centre
+  - Compute normalized (error_x, error_y) in [-1.0, 1.0] from frame centre
+  - Apply a deadband to suppress micro-jitter when face is centred
+  - Draw face rectangle, centre dot, crosshair, and HUD overlay
   - Expose face_absent_duration for the no-face timeout in main.py
 
 Sign convention (matches servo_controller expectations):
-  error_x > 0 → nose is RIGHT of center  → pan servo should increase angle
-  error_y > 0 → nose is BELOW center     → tilt servo direction depends on mount
-                                            (configurable via PID kp sign in config.yaml)
+  error_x > 0 → face centre is RIGHT of frame centre  → pan servo increases
+  error_y > 0 → face centre is BELOW  frame centre     → tilt direction depends on mount
+                                                          (configurable via PID kp sign)
 """
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -31,13 +34,13 @@ logger = logging.getLogger(__name__)
 class TrackingResult:
     """Result from one frame of head tracking."""
     face_detected: bool
-    error_x: float = 0.0          # normalized [-1, 1]; positive = nose right of center
-    error_y: float = 0.0          # normalized [-1, 1]; positive = nose below center
-    landmark_px: Optional[Tuple[int, int]] = None  # pixel coords of tracked landmark
+    error_x: float = 0.0          # normalised [-1, 1]; positive = face right of centre
+    error_y: float = 0.0          # normalised [-1, 1]; positive = face below centre
+    landmark_px: Optional[Tuple[int, int]] = None  # pixel coords of tracked point
 
 
 class HeadTracker:
-    """MediaPipe FaceMesh-based head tracker with overlay rendering."""
+    """OpenCV Haar-cascade-based head tracker with overlay rendering."""
 
     def __init__(self, config: dict, frame_width: int, frame_height: int) -> None:
         """
@@ -51,29 +54,25 @@ class HeadTracker:
         self._frame_w = frame_width
         self._frame_h = frame_height
 
-        self._landmark_index  = int(self._tracking_cfg.get("landmark_index", 4))
         self._deadband        = float(self._tracking_cfg.get("deadband", 0.03))
         self._no_face_timeout = float(self._tracking_cfg.get("no_face_timeout", 1.5))
 
         self._last_face_time: float = time.monotonic()
         self._face_absent_logged: bool = False
 
-        # MediaPipe FaceMesh setup
-        mp_fm = mp.solutions.face_mesh
-        self._face_mesh = mp_fm.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,           # enables iris landmarks (468+)
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self._mp_drawing        = mp.solutions.drawing_utils
-        self._mp_drawing_styles = mp.solutions.drawing_styles
-        self._mp_face_mesh      = mp_fm
+        # OpenCV Haar cascade — ships with every OpenCV install, no download needed
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        self._detector = cv2.CascadeClassifier(cascade_path)
+        if self._detector.empty():
+            raise RuntimeError(
+                f"Failed to load Haar cascade from {cascade_path}. "
+                "Reinstall opencv-python."
+            )
 
         logger.info(
-            "HeadTracker ready. Landmark index=%d, deadband=%.3f, "
-            "frame=%dx%d",
-            self._landmark_index, self._deadband, frame_width, frame_height,
+            "HeadTracker ready (OpenCV Haar cascade). "
+            "deadband=%.3f, frame=%dx%d",
+            self._deadband, frame_width, frame_height,
         )
 
     # ------------------------------------------------------------------
@@ -107,55 +106,40 @@ class HeadTracker:
         cx = frame_w / 2.0
         cy = frame_h / 2.0
 
-        # MediaPipe requires RGB; mark non-writeable to avoid an internal copy
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb.flags.writeable = False
-        mp_results = self._face_mesh.process(rgb)
-        rgb.flags.writeable = True
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Detect faces — minSize scaled to ~4 % of frame height for robustness
+        # at 1920×1080 this is roughly 43 px; keeps out tiny false positives.
+        min_dim = max(40, int(frame_h * 0.04))
+        faces = self._detector.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(min_dim, min_dim),
+            flags=cv2.CASCADE_SCALE_IMAGE,
+        )
 
         result = TrackingResult(face_detected=False)
 
-        if mp_results.multi_face_landmarks:
-            face_landmarks = mp_results.multi_face_landmarks[0]
+        if len(faces) > 0:
+            # Pick the largest detected face by area
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+            face_cx = x + w // 2
+            face_cy = y + h // 2
 
-            # Draw tessellation and contours
-            self._mp_drawing.draw_landmarks(
-                image=frame,
-                landmark_list=face_landmarks,
-                connections=self._mp_face_mesh.FACEMESH_TESSELATION,
-                landmark_drawing_spec=None,
-                connection_drawing_spec=(
-                    self._mp_drawing_styles.get_default_face_mesh_tesselation_style()
-                ),
-            )
-            self._mp_drawing.draw_landmarks(
-                image=frame,
-                landmark_list=face_landmarks,
-                connections=self._mp_face_mesh.FACEMESH_CONTOURS,
-                landmark_drawing_spec=None,
-                connection_drawing_spec=(
-                    self._mp_drawing_styles.get_default_face_mesh_contours_style()
-                ),
-            )
-
-            # Extract nose tip landmark (index 4 by default)
-            lm = face_landmarks.landmark[self._landmark_index]
-            nose_px = (int(lm.x * frame_w), int(lm.y * frame_h))
-
-            # Draw tracked point
+            # Draw bounding box and centre dot
             lm_color = tuple(
                 int(c) for c in self._display_cfg.get("landmark_color", [0, 200, 255])
             )
-            cv2.circle(frame, nose_px, 7, lm_color, -1)
-            cv2.circle(frame, nose_px, 9, (0, 0, 0), 1)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), lm_color, 2)
+            cv2.circle(frame, (face_cx, face_cy), 6, lm_color, -1)
+            cv2.circle(frame, (face_cx, face_cy), 8, (0, 0, 0), 1)
 
-            # Normalized error: range [-1, 1] relative to half-frame dimension.
-            # Resolution-independent: gains in config.yaml don't need to change
-            # if camera resolution changes.
-            raw_ex = (nose_px[0] - cx) / (frame_w / 2.0)
-            raw_ey = (nose_px[1] - cy) / (frame_h / 2.0)
+            # Normalised error: [-1, 1] relative to half-frame dimension
+            raw_ex = (face_cx - cx) / (frame_w / 2.0)
+            raw_ey = (face_cy - cy) / (frame_h / 2.0)
 
-            # Apply deadband — zero out small errors to suppress servo jitter
+            # Deadband — zero out small errors to suppress servo jitter
             error_x = raw_ex if abs(raw_ex) > self._deadband else 0.0
             error_y = raw_ey if abs(raw_ey) > self._deadband else 0.0
 
@@ -163,7 +147,7 @@ class HeadTracker:
                 face_detected=True,
                 error_x=error_x,
                 error_y=error_y,
-                landmark_px=nose_px,
+                landmark_px=(face_cx, face_cy),
             )
 
             self._last_face_time = time.monotonic()
@@ -181,8 +165,7 @@ class HeadTracker:
         return result
 
     def close(self) -> None:
-        """Release MediaPipe resources."""
-        self._face_mesh.close()
+        """No-op — CascadeClassifier holds no external resources."""
 
     # ------------------------------------------------------------------
     # Drawing helpers
@@ -195,7 +178,7 @@ class HeadTracker:
         thickness = int(self._display_cfg.get("line_thickness", 1))
         h, w      = frame.shape[:2]
         icx, icy  = int(cx), int(cy)
-        gap = 16   # pixel gap around the center reticle
+        gap = 16   # pixel gap around the centre reticle
 
         cv2.line(frame, (0,         icy), (icx - gap, icy), color, thickness)
         cv2.line(frame, (icx + gap, icy), (w - 1,     icy), color, thickness)
@@ -210,14 +193,14 @@ class HeadTracker:
         pan_angle: float,
         tilt_angle: float,
     ) -> None:
-        color     = tuple(
+        color  = tuple(
             int(c) for c in self._display_cfg.get("text_color", [255, 255, 255])
         )
-        scale     = float(self._display_cfg.get("font_scale", 0.55))
-        font      = cv2.FONT_HERSHEY_SIMPLEX
-        h, w      = frame.shape[:2]
-        line_h    = int(scale * 32)
-        pad       = 6
+        scale  = float(self._display_cfg.get("font_scale", 0.55))
+        font   = cv2.FONT_HERSHEY_SIMPLEX
+        h, w   = frame.shape[:2]
+        line_h = int(scale * 32)
+        pad    = 6
 
         lines = [
             f"Pan:  {pan_angle:6.1f} deg",
